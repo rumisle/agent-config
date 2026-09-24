@@ -44,13 +44,14 @@ Long command: log to a file, signal when done, wait on the signal. `tmux wait-fo
 ```bash
 S=agent-build-$(openssl rand -hex 3); L=/tmp/$S.log
 tmux new-session -d -s "$S" -e S="$S" -e L="$L" '(cargo build --release) >"$L" 2>&1; echo "[exit $?]" >>"$L"; tmux wait-for -S "$S"'
-timeout 10 tmux wait-for "$S"; tail -n 20 "$L"     # short first wait: did it start OK?
-timeout 600 tmux wait-for "$S"; tail -n 40 "$L"    # looks healthy: now wait long
+timeout 10 tmux wait-for "$S"; tail -n 20 "$L"                                       # short first wait: did it start OK?
+tail -n1 "$L" | rg -q '^\[exit' || timeout 600 tmux wait-for "$S"; tail -n 40 "$L"  # then wait long; safe to repeat
 ```
 
 - Keep the command inside `( )` so all of its output goes to the log.
-- Wait short first to catch immediate failures and check the output looks right, then wait long. `timeout` exit 124 means it is still running: `tail "$L"` for progress, then wait again.
-- The log outlives the session. Its last line is `[exit N]`.
+- Wait short first to catch immediate failures and check the output looks right, then wait long.
+- Done when the log's last line is `[exit N]`. The signal is consumed by the first wait that sees it, so a bare second `wait-for` on a finished job hangs until its timeout; always wait through the guarded line.
+- The log outlives the session.
 
 Interactive program: wait for the text you expect, then answer.
 
