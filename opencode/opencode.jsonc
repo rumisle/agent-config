@@ -2,7 +2,8 @@
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     "github:rumisle/opencode-anth#d92862ebcdbee624039a94a30ea50de77a1b1cb6",
-    { "package": "github:rumisle/opencode-cache-warmer#688d10287ad9f9c22a578628674870c9e3e5683d", "options": { "mode": "idle" } }
+    { "package": "github:rumisle/opencode-cache-warmer#688d10287ad9f9c22a578628674870c9e3e5683d", "options": { "mode": "idle" } },
+    "github:rumisle/opencode-vcc#81331e719109973a7ef816041b1116ff64a4b790"
   ],
   "permissions": [
     { "action": "question", "resource": "*", "effect": "deny" },
