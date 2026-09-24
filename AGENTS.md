@@ -16,7 +16,7 @@ uv add package-name
 
 ## Non-Interactive Commands Only
 
-Never run commands that block waiting for user input, unless in a tmux session or similar where it won't block the agent:
+Never run commands that block waiting for user input, except inside tmux (see below):
 
 - Use `GIT_EDITOR=true git rebase --continue`
 - Use `git merge --no-edit`
@@ -29,23 +29,40 @@ Never run commands that block waiting for user input, unless in a tmux session o
 - Use write for new files or near-complete rewrites; prefer edit for partial changes to existing files
 - Prefer `fd` and `rg` over `find` and `grep`
 
+## Long-running Commands
+
+- If your shell tool can run commands in the background and notify you when they finish (OpenCode: `background: true`), use that for long non-interactive commands. OpenCode kills foreground commands after 2 minutes unless you pass a larger `timeout`.
+- Otherwise, and for anything interactive or that must outlive your session, use tmux.
+- Never `sleep N` to wait for a command to finish. Wait on the command itself.
+
 ## Tmux
 
-Use tmux for interactive or long-running commands that would otherwise block the agent.
+Name sessions `agent-<purpose>-<sha>` with a random short sha so parallel agents never collide. Always `-d`; never attach, it blocks you.
 
-Name sessions `pi-<purpose>-<sha>` with a random short sha so parallel agents never collide:
+Long command: log to a file, signal when done, wait on the signal. `tmux wait-for` returns the moment the command ends, even if it ended before you started waiting.
 
 ```bash
-S=pi-build-$(openssl rand -hex 3)          # -> pi-build-1abd75
-tmux new-session -d -s "$S" 'cargo build --release'
-tmux capture-pane -pt "$S" -S - | rg -v '^$'   # read output (-S - = full scrollback)
-tmux send-keys -t "$S" 'y' Enter               # answer a prompt
-tmux kill-session -t "$S"                      # always clean up
+S=agent-build-$(openssl rand -hex 3); L=/tmp/$S.log
+tmux new-session -d -s "$S" -e S="$S" -e L="$L" '(cargo build --release) >"$L" 2>&1; echo "[exit $?]" >>"$L"; tmux wait-for -S "$S"'
+timeout 300 tmux wait-for "$S"; tail -n 40 "$L"
 ```
 
-- Always `-d`. Never attach: it blocks the agent.
-- `tmux ls | rg '^pi-'` lists agent sessions.
-- Plain `capture-pane -p` pads with blank lines; `-S -` plus `rg -v '^$'` is cleaner.
+- Keep the command inside `( )` so all of its output goes to the log.
+- `timeout` exit 124 means it is still running: `tail "$L"` for progress, then wait again.
+- The log outlives the session. Its last line is `[exit N]`.
+
+Interactive program: wait for the text you expect, then answer.
+
+```bash
+S=agent-ssh-$(openssl rand -hex 3)
+tmux new-session -d -s "$S" 'ssh host'
+timeout 30 sh -c "until tmux capture-pane -pt $S | rg -q 'password:'; do sleep 0.3; done"
+tmux send-keys -t "$S" 'y' Enter
+tmux capture-pane -pt "$S" -S - | rg -v '^$'
+tmux kill-session -t "$S"
+```
+
+- `tmux ls | rg '^agent-'` lists agent sessions. Kill yours when done.
 
 ## SSH Command Execution
 
