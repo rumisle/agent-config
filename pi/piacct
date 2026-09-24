@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# pi account switcher (symlink-based, self-rotating)
+#
+# ~/.pi/agent/auth.json is a symlink into accounts/<name>.json. pi writes
+# OAuth token rotations straight through the link into the active account
+# file, so each account stays its own always-current store. Switching just
+# repoints the link -- nothing to save out, nothing goes stale.
+#
+# Usage:
+#   piacct                 show current account + list all
+#   piacct <name>          switch to an existing account
+#   piacct new <name>      create a blank account and make it active,
+#                          then run `pi` and /login
+
+dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+acc="$dir/accounts"
+link="$dir/auth.json"
+mkdir -p "$acc"
+
+cmd="${1:-}"
+
+usage() {
+  cat <<'EOF'
+piacct - pi account switcher
+
+Usage:
+  piacct                 show current account + list all
+  piacct <name>          switch to an existing account
+  piacct new <name>      create a blank account and make it active
+  piacct -h | --help     show this help
+
+Account names must be alphanumeric plus '-', '_', '.' (no leading '-').
+EOF
+}
+
+# valid account name: no leading dash, only safe chars
+valid_name() {
+  case "$1" in
+    -* | "" ) return 1 ;;
+    *[!A-Za-z0-9._-]* ) return 1 ;;
+    * ) return 0 ;;
+  esac
+}
+
+if [ "$cmd" = "-h" ] || [ "$cmd" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+# one-time migration: an existing real auth.json becomes an account
+if [ -e "$link" ] && [ ! -L "$link" ]; then
+  name="${cmd:-default}"
+  mv "$link" "$acc/$name.json"
+  ln -sfn "accounts/$name.json" "$link"
+  echo "migrated auth.json -> accounts/$name.json"
+  [ -n "$cmd" ] && exit 0
+  cmd=""
+fi
+
+case "$cmd" in
+  "")
+    cur=""
+    [ -L "$link" ] && cur="$(basename "$(readlink "$link")" .json)"
+    echo "current: ${cur:-<none>}"
+    echo "accounts:"
+    for f in "$acc"/*.json; do
+      [ -e "$f" ] || continue
+      echo "  - $(basename "$f" .json)"
+    done
+    ;;
+  new)
+    name="${2:-}"
+    valid_name "$name" || { echo "invalid account name: '${name:-<empty>}'"; echo; usage; exit 1; }
+    [ -e "$acc/$name.json" ] && { echo "account '$name' already exists (use: piacct $name)"; exit 1; }
+    echo '{}' > "$acc/$name.json"
+    chmod 600 "$acc/$name.json"
+    ln -sfn "accounts/$name.json" "$link"
+    echo "new account '$name' active - run pi and /login"
+    ;;
+  *)
+    valid_name "$cmd" || { echo "invalid account name: '$cmd'"; echo; usage; exit 1; }
+    [ -e "$acc/$cmd.json" ] || { echo "no account '$cmd' (try: piacct new $cmd)"; exit 1; }
+    if pgrep -x pi >/dev/null 2>&1; then
+      echo "note: quit pi first; switching changes which file it writes"
+    fi
+    ln -sfn "accounts/$cmd.json" "$link"
+    echo "switched -> $cmd"
+    ;;
+esac

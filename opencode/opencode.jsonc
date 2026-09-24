@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["github:rumisle/opencode-anth#d92862ebcdbee624039a94a30ea50de77a1b1cb6"],
+  "permissions": [
+    { "action": "question", "resource": "*", "effect": "deny" },
+    { "action": "websearch", "resource": "*", "effect": "deny" },
+    { "action": "webfetch", "resource": "*", "effect": "deny" },
+    { "action": "*list_mcp_resources", "resource": "*", "effect": "deny" },
+    { "action": "*read_mcp_resource", "resource": "*", "effect": "deny" }
+  ]
+}
