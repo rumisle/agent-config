@@ -1,5 +1,5 @@
 *.bak.*
-opencode/service.json
+opencode/service*.json
 opencode/node_modules/
 opencode/package.json
 opencode/package-lock.json
