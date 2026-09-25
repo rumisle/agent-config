@@ -11,6 +11,12 @@
     { "action": "websearch", "resource": "*", "effect": "deny" },
     { "action": "webfetch", "resource": "*", "effect": "deny" },
     { "action": "*list_mcp_resources", "resource": "*", "effect": "deny" },
-    { "action": "*read_mcp_resource", "resource": "*", "effect": "deny" }
-  ]
+    { "action": "*read_mcp_resource", "resource": "*", "effect": "deny" },
+    { "action": "subagent", "resource": "*", "effect": "deny" }
+  ],
+  "agents": {
+    "plan": { "disabled": true },
+    "general": { "disabled": true },
+    "explore": { "disabled": true }
+  }
 }
