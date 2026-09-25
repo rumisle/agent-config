@@ -2,7 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     "github:rumisle/opencode-anth#d92862ebcdbee624039a94a30ea50de77a1b1cb6",
-    { "package": "github:rumisle/opencode-cache-warmer#36ea65b891d224abe0b64f93cb5ab651f5919fca", "options": { "mode": "idle" } },
+    { "package": "github:rumisle/opencode-cache-warmer#2d9fe82aa86bd28bcab98513db40bfefbdc01465", "options": { "mode": "idle" } },
     "github:rumisle/opencode-vcc#81331e719109973a7ef816041b1116ff64a4b790",
     "github:rumisle/opencode-octopi#83679089eafdf6a18f2e89a251acee596b8322de"
   ],
