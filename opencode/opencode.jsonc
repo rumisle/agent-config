@@ -4,7 +4,7 @@
     "github:rumisle/opencode-anth#d92862ebcdbee624039a94a30ea50de77a1b1cb6",
     { "package": "github:rumisle/opencode-cache-warmer#688d10287ad9f9c22a578628674870c9e3e5683d", "options": { "mode": "idle" } },
     "github:rumisle/opencode-vcc#81331e719109973a7ef816041b1116ff64a4b790",
-    "github:rumisle/opencode-octopi#8636e08ff1251e9a70f12d166dfb5b49674100a7"
+    "github:rumisle/opencode-octopi#83679089eafdf6a18f2e89a251acee596b8322de"
   ],
   "permissions": [
     { "action": "question", "resource": "*", "effect": "deny" },
