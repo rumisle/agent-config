@@ -7,6 +7,8 @@
   ],
   // ocelot: checkpoint compaction (patch core/checkpoint-compaction). Compacts at min(90% of the window, 540k).
   "compaction": { "strategy": "checkpoint" },
+  // ocelot: no model-initiated background shells (patch core/no-shell-background); long commands use bgjob (AGENTS.md).
+  "experimental": { "no_shell_background": true },
   "permissions": [
     { "action": "question", "resource": "*", "effect": "deny" },
     { "action": "websearch", "resource": "*", "effect": "deny" },
