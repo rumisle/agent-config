@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# bgjob: run commands in the background for agents, on a private tmux server.
+#
+#   bgjob start NAME [-C DIR] -- CMD...   start; returns at once with the job ID
+#   bgjob wait ID [-t SECS]               block until it ends or SECS pass (default 60); prints one status line
+#   bgjob log ID [-n N]                   last N lines of output (default 40; colors and \r redraws removed)
+#   bgjob peek ID                         the job's screen right now (progress bars, prompts)
+#   bgjob send ID KEYS...                 type into it (tmux send-keys: 'yes' Enter, C-c, ...)
+#   bgjob ls                              all jobs
+#   bgjob kill ID                         stop it and everything it started
+#
+# One CMD argument is a shell string (pipes, &&); several are a command and its arguments.
+# ID is the tmux session name; NAME alone means its newest job. Watch one with
+# `tmux -L agent attach -t ID`. Status: running, exited N, killed, died (gone without an
+# exit status). `wait` exits with the job's status, 75 while it is still running.
+set -uo pipefail
+
+SOCK=${BGJOB_SOCKET:-agent}
+ROOT=${BGJOB_DIR:-/tmp/bgjob}
+RUNNING=75
+
+die() { echo "bgjob: $*" >&2; exit 2; }
+tm() { tmux -L "$SOCK" -f /dev/null "$@"; }
+alive() { tm has-session -t "=$1" 2>/dev/null; }
+
+usage() { sed -n '2,/^set /{/^set /d;s/^# \{0,1\}//;p}' "$0"; exit "${1:-0}"; }
+
+resolve() {
+  local id=$1
+  [ -n "$id" ] || die "missing job ID"
+  if [ -d "$ROOT/$id" ] && [ -f "$ROOT/$id/cmd" ]; then echo "$id"; return; fi
+  # A bare NAME: its newest job.
+  local newest
+  newest=$(ls -1td "$ROOT/$id"-??? 2>/dev/null | head -1)
+  [ -n "$newest" ] || die "no job $id (bgjob ls)"
+  basename "$newest"
+}
+
+# running | exited N | killed | died | starting
+state() {
+  local dir=$ROOT/$1
+  if [ -f "$dir/exit" ]; then echo "exited $(cat "$dir/exit")"
+  elif [ -f "$dir/killed" ]; then echo killed
+  elif alive "$1"; then echo running
+  # It may have finished between the checks above: the exit file is written before the session ends.
+  elif [ -f "$dir/exit" ]; then echo "exited $(cat "$dir/exit")"
+  elif [ -f "$dir/killed" ]; then echo killed
+  elif [ -f "$dir/launched" ]; then echo died
+  else echo starting
+  fi
+}
+
+human() {
+  local s=$1
+  if [ "$s" -lt 60 ]; then echo "${s}s"
+  elif [ "$s" -lt 3600 ]; then printf '%dm%02ds\n' $((s / 60)) $((s % 60))
+  else printf '%dh%02dm\n' $((s / 3600)) $((s % 3600 / 60))
+  fi
+}
+
+elapsed() {
+  local dir=$ROOT/$1 end
+  end=$(stat -c %Y "$dir/exit" "$dir/killed" 2>/dev/null | head -1)
+  [ -n "$end" ] || { [ "$(state "$1")" = died ] && end=$(stat -c %Y "$dir/log"); }
+  human $(( ${end:-$(date +%s)} - $(cat "$dir/started") ))
+}
+
+line() {
+  local st
+  st=$(state "$1")
+  case $st in
+    running | starting) echo "$1 $st $(elapsed "$1")" ;;
+    *) echo "$1 $st after $(elapsed "$1")" ;;
+  esac
+}
+
+cleanup_old() {
+  local d
+  for d in "$ROOT"/*/; do
+    [ -d "$d" ] || continue
+    if [ -n "$(find "$d" -maxdepth 1 \( -name exit -o -name killed \) -mtime +7 2>/dev/null)" ]; then
+      rm -rf -- "$d"
+    fi
+  done
+}
+
+cmd_start() {
+  local name=${1:-} cwd=$PWD
+  [ -n "$name" ] && [ "$name" != -- ] || die "usage: bgjob start NAME [-C DIR] -- CMD..."
+  [[ $name =~ ^[A-Za-z0-9_.-]{1,40}$ ]] || die "NAME: letters, digits, _ . - (max 40)"
+  shift
+  if [ "${1:-}" = -C ]; then cwd=$(cd -- "${2:-}" && pwd) || die "no directory ${2:-}"; shift 2; fi
+  [ "${1:-}" = -- ] || die "usage: bgjob start NAME [-C DIR] -- CMD..."
+  shift
+  [ $# -gt 0 ] || die "no command"
+
+  mkdir -p "$ROOT" && chmod 700 "$ROOT" 2>/dev/null
+  cleanup_old
+  local id dir
+  for _ in 1 2 3 4 5 6 7 8; do
+    id=$name-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n' | cut -c1-3)
+    dir=$ROOT/$id
+    mkdir "$dir" 2>/dev/null && break
+    id=
+  done
+  [ -n "$id" ] || die "could not allocate an ID"
+
+  if [ $# -eq 1 ]; then printf '%s\n' "$1" >"$dir/cmd"; else printf '%q ' "$@" >"$dir/cmd"; fi
+  printf '%s\n' "$cwd" >"$dir/cwd"
+  date +%s >"$dir/started"
+  : >"$dir/log"
+  export -p >"$dir/env"
+  # The runner waits for the go signal, so the log pipe is attached before any output.
+  cat >"$dir/run" <<EOF
+. $(printf '%q' "$dir/env") 2>/dev/null
+tmux -L $(printf '%q' "$SOCK") -f /dev/null wait-for $(printf '%q' "$id-go")
+cd -- $(printf '%q' "$cwd") || { echo 126 >$(printf '%q' "$dir/exit.tmp"); mv -f $(printf '%q' "$dir/exit.tmp") $(printf '%q' "$dir/exit"); exit; }
+bash -c "\$(cat $(printf '%q' "$dir/cmd"))"
+echo \$? >$(printf '%q' "$dir/exit.tmp")
+mv -f $(printf '%q' "$dir/exit.tmp") $(printf '%q' "$dir/exit")
+EOF
+  tm new-session -d -s "$id" -x 200 -y 50 "bash $(printf '%q' "$dir/run")" || die "tmux failed to start $id"
+  tm set-option -t "=$id" remain-on-exit off >/dev/null 2>&1
+  tm pipe-pane -t "=$id:" -o "cat >> $(printf '%q' "$dir/log")" || die "tmux failed to log $id"
+  touch "$dir/launched"
+  tm wait-for -S "$id-go"
+  echo "$id started  log $dir/log  watch: tmux -L $SOCK attach -t $id"
+}
+
+cmd_wait() {
+  local id t=60
+  id=$(resolve "${1:-}") || exit 2
+  shift
+  if [ "${1:-}" = -t ]; then t=${2:-}; shift 2; fi
+  [[ $t =~ ^[0-9]+([.][0-9]+)?$ ]] || die "-t takes seconds"
+  local deadline st
+  deadline=$(awk -v t="$t" -v now="$(date +%s.%N)" 'BEGIN { printf "%.3f", now + t }')
+  while :; do
+    st=$(state "$id")
+    case $st in running | starting) ;; *) break ;; esac
+    awk -v d="$deadline" -v now="$(date +%s.%N)" 'BEGIN { exit !(now >= d) }' && break
+    sleep 0.2
+  done
+  # A finished job's last output can trail its exit file by a moment.
+  case $st in
+    running | starting) ;;
+    *) for _ in 1 2 3 4 5 6 7 8 9 10; do alive "$id" || break; sleep 0.1; done; sleep 0.05 ;;
+  esac
+  line "$id"
+  case $st in
+    "exited "*) exit "${st#exited }" ;;
+    killed) exit 137 ;;
+    died) exit 70 ;;
+    *) exit $RUNNING ;;
+  esac
+}
+
+clean() {
+  # Drop escape sequences, keep what the last \r redraw left on each line.
+  LC_ALL=C sed -E $'s/\x1b\\[[0-9;?]*[ -\\/]*[@-~]//g; s/\x1b\\][^\x07]*(\x07|\x1b\\\\)//g; s/\x1b[()][A-Za-z0-9]//g; s/\x1b[=>]//g; s/\r+$//; s/.*\r//'
+}
+
+cmd_log() {
+  local id n=40
+  id=$(resolve "${1:-}") || exit 2
+  shift
+  if [ "${1:-}" = -n ]; then n=${2:-}; shift 2; fi
+  [[ $n =~ ^[0-9]+$ ]] || die "-n takes a number"
+  tail -n "$n" "$ROOT/$id/log" | clean
+}
+
+cmd_peek() {
+  local id
+  id=$(resolve "${1:-}") || exit 2
+  alive "$id" || { line "$id"; echo "(not running; use bgjob log)"; return; }
+  tm capture-pane -p -t "=$id:" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+}
+
+cmd_send() {
+  local id
+  id=$(resolve "${1:-}") || exit 2
+  shift
+  [ $# -gt 0 ] || die "usage: bgjob send ID KEYS..."
+  alive "$id" || die "$id is not running"
+  tm send-keys -t "=$id:" "$@"
+}
+
+cmd_ls() {
+  local d id
+  for d in $(ls -1trd "$ROOT"/*/ 2>/dev/null); do
+    id=$(basename "$d")
+    [ -f "$d/cmd" ] || continue
+    printf '%-28s %-24s %s\n' "$id" "$(state "$id") $(elapsed "$id")" "$(head -c 80 "$d/cmd" | tr '\n' ' ')"
+  done
+}
+
+cmd_kill() {
+  local id pid
+  id=$(resolve "${1:-}") || exit 2
+  case $(state "$id") in running | starting) ;; *) line "$id"; return ;; esac
+  pid=$(tm display-message -p -t "=$id:" '#{pane_pid}' 2>/dev/null)
+  touch "$ROOT/$id/killed"
+  if [ -n "$pid" ]; then
+    kill -TERM -- "-$pid" 2>/dev/null
+    for _ in $(seq 30); do kill -0 -- "-$pid" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL -- "-$pid" 2>/dev/null
+  fi
+  tm kill-session -t "=$id" 2>/dev/null
+  line "$id"
+}
+
+case ${1:-} in
+  start) shift; cmd_start "$@" ;;
+  wait) shift; cmd_wait "$@" ;;
+  log) shift; cmd_log "$@" ;;
+  peek) shift; cmd_peek "$@" ;;
+  send) shift; cmd_send "$@" ;;
+  ls) shift; cmd_ls ;;
+  kill) shift; cmd_kill "$@" ;;
+  -h | --help | help) usage ;;
+  *) usage 2 >&2 ;;
+esac

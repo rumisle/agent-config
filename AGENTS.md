@@ -16,7 +16,7 @@ uv add package-name
 
 ## Non-Interactive Commands Only
 
-Never run commands that block waiting for user input, except inside tmux (see below):
+Never run commands that block waiting for user input, except as a bgjob (see below):
 
 - Use `GIT_EDITOR=true git rebase --continue`
 - Use `git merge --no-edit`
@@ -29,42 +29,24 @@ Never run commands that block waiting for user input, except inside tmux (see be
 - Use write for new files or near-complete rewrites; prefer edit for partial changes to existing files
 - Prefer `fd` and `rg` over `find` and `grep`
 
-## Long-running Commands
+## Long-running and Interactive Commands
 
-- If your shell tool can run commands in the background and notify you when they finish (OpenCode: `background: true`), use that for long non-interactive commands. OpenCode kills foreground commands after 2 minutes unless you pass a larger `timeout`.
-- Otherwise, and for anything interactive or that must outlive your session, use tmux.
-- Never `sleep N` to wait for a command to finish. Wait on the command itself.
-
-## Tmux
-
-Name sessions `agent-<purpose>-<sha>` with a random short sha so parallel agents never collide. Always `-d`; never attach, it blocks you.
-
-Long command: log to a file, signal when done, wait on the signal. `tmux wait-for` returns the moment the command ends, even if it ended before you started waiting.
+Run anything that may take more than ~30 s, or that asks for input, as a bgjob. Never `sleep` to wait.
 
 ```bash
-S=agent-build-$(openssl rand -hex 3); L=/tmp/$S.log
-tmux new-session -d -s "$S" -e S="$S" -e L="$L" '(cargo build --release) >"$L" 2>&1; echo "[exit $?]" >>"$L"; tmux wait-for -S "$S"'
-timeout 10 tmux wait-for "$S"; tail -n 20 "$L"                                       # short first wait: did it start OK?
-tail -n1 "$L" | rg -q '^\[exit' || timeout 600 tmux wait-for "$S"; tail -n 40 "$L"  # then wait long; safe to repeat
+bgjob start build -- cargo build --release        # returns at once: "build-3fa started ..."
+bgjob log build-3fa                               # right away: did it start?
+bgjob wait build-3fa -t 10; bgjob log build-3fa   # a little later: early errors show up here
+bgjob wait build-3fa -t 600                       # then as long as the task needs; repeat while it says running
 ```
 
-- Keep the command inside `( )` so all of its output goes to the log.
-- Wait short first to catch immediate failures and check the output looks right, then wait long.
-- Done when the log's last line is `[exit N]`. The signal is consumed by the first wait that sees it, so a bare second `wait-for` on a finished job hangs until its timeout; always wait through the guarded line.
-- The log outlives the session.
-
-Interactive program: wait for the text you expect, then answer.
-
-```bash
-S=agent-ssh-$(openssl rand -hex 3)
-tmux new-session -d -s "$S" 'ssh host'
-timeout 30 sh -c "until tmux capture-pane -pt $S | rg -q 'password:'; do sleep 0.3; done"
-tmux send-keys -t "$S" 'y' Enter
-tmux capture-pane -pt "$S" -S - | rg -v '^$'
-tmux kill-session -t "$S"
-```
-
-- `tmux ls | rg '^agent-'` lists agent sessions. Kill yours when done.
+- Pick the check times for the task: a build that fails on a typo fails in seconds, a training run in minutes.
+- Keep `wait -t` below your shell tool's own timeout (OpenCode: 2 min unless you pass a larger `timeout`); waiting again is free.
+- `wait` only prints a status line: `running 1m35s`, `exited 0 after 2m41s`, `killed`, or `died` (gone without an exit status). Read output with `log` (`-n 200` for more).
+- One argument after `--` is a shell line (`-- 'make && make test'`); several are a command and its arguments. `-C DIR` sets the directory.
+- Interactive: `bgjob peek ID` shows the screen; once the prompt is there, `bgjob send ID 'yes' Enter`.
+- Jobs outlive your tool call and your session. `bgjob ls` lists them; `bgjob kill ID` stops one and everything it started.
+- The user can watch a job with `tmux -L agent attach -t ID`.
 
 ## SSH Command Execution
 

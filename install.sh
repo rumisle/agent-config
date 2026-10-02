@@ -21,6 +21,7 @@ link() {
 link "$here/AGENTS.md" "$HOME/.pi/agent/AGENTS.md"
 link "$here/pi/extensions" "$HOME/.pi/agent/extensions"
 link "$here/pi/piacct" "$HOME/.local/bin/piacct"
+link "$here/bin/bgjob" "$HOME/.local/bin/bgjob"
 link "$here/opencode" "$config/opencode"
 
 [ -L "$HOME/.pi/agent/skills" ] && rm "$HOME/.pi/agent/skills" && echo "removed ~/.pi/agent/skills (pi reads ~/.agents/skills)"
