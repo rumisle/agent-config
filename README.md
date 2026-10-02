@@ -15,6 +15,7 @@ git clone https://github.com/rumisle/agent-config ~/work/agent-config
 | `skills/*` | `~/.agents/skills/*`, read by both pi and OpenCode |
 | `pi/extensions` | `~/.pi/agent/extensions` |
 | `pi/piacct` | `~/.local/bin/piacct` |
+| `bin/bgjob` | `~/.local/bin/bgjob`: background and interactive commands for agents (needs tmux; see AGENTS.md) |
 | `opencode/` | `~/.config/opencode` |
 
 Skills from a sibling `agent-config-private` checkout (or `$AGENT_CONFIG_PRIVATE`) are linked too, if it exists.
