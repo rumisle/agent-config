@@ -10,6 +10,8 @@
   // ocelot: no model-initiated background shells (patch core/no-shell-background); long commands use bgjob (AGENTS.md).
   "experimental": { "no_shell_background": true },
   "permissions": [
+    // Never ask: allow everything (the last matching rule wins, so the denies below still apply).
+    { "action": "*", "resource": "*", "effect": "allow" },
     { "action": "question", "resource": "*", "effect": "deny" },
     { "action": "websearch", "resource": "*", "effect": "deny" },
     { "action": "webfetch", "resource": "*", "effect": "deny" },

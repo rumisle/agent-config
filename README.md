@@ -55,4 +55,4 @@ piacct new <name>   # create, then run pi and /login
 
 ## OpenCode
 
-`opencode/opencode.jsonc` loads [opencode-anth](https://github.com/rumisle/opencode-anth) and [opencode-cache-warmer](https://github.com/rumisle/opencode-cache-warmer) (pi-style cache warming, `idle` mode), and disables `question`, `websearch`, `webfetch` and the MCP resource tools.
+`opencode/opencode.jsonc` loads [opencode-anth](https://github.com/rumisle/opencode-anth) and [opencode-cache-warmer](https://github.com/rumisle/opencode-cache-warmer) (pi-style cache warming, `idle` mode), allows every tool without asking (no permission prompts), and disables `question`, `websearch`, `webfetch` and the MCP resource tools.
