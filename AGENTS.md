@@ -14,6 +14,12 @@ uv run --with requests,beautifulsoup4 python3 -c "..."
 uv add package-name
 ```
 
+## Public Repos
+
+Never write personal details into a public repo (files, commit messages, issues): host names, IPs,
+which machines or devices the user has, what can reach what (ssh, tailnet), accounts. Describe the
+setup generically ("the machine to control", "a phone"), or keep such notes out of the repo.
+
 ## Non-Interactive Commands Only
 
 Never run commands that block waiting for user input, except as a bgjob (see below):
