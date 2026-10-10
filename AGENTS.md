@@ -51,7 +51,7 @@ bgjob wait build-3fa -t 600                       # then as long as the task nee
 - `wait` only prints a status line: `running 1m35s`, `exited 0 after 2m41s`, `killed`, or `died` (gone without an exit status). Read output with `log` (`-n 200` for more).
 - One argument after `--` is a shell line (`-- 'make && make test'`); several are a command and its arguments. `-C DIR` sets the directory.
 - Interactive: `bgjob peek ID` shows the screen; once the prompt is there, `bgjob send ID 'yes' Enter`.
-- Jobs outlive your tool call and your session. `bgjob ls` lists them; `bgjob kill ID` stops one and everything it started.
+- Jobs outlive your tool call and your session. `bgjob ls` lists the running ones (`-a` adds finished ones); `bgjob kill ID` stops one and everything it started.
 - The user can watch a job with `tmux -L agent attach -t ID`.
 
 ## SSH Command Execution

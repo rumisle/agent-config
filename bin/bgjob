@@ -6,7 +6,7 @@
 #   bgjob log ID [-n N]                   last N lines of output (default 40; colors and \r redraws removed)
 #   bgjob peek ID                         the job's screen right now (progress bars, prompts)
 #   bgjob send ID KEYS...                 type into it (tmux send-keys: 'yes' Enter, C-c, ...)
-#   bgjob ls                              all jobs
+#   bgjob ls [-a]                         running jobs (-a: also finished ones from the last 7 days)
 #   bgjob kill ID                         stop it and everything it started
 #
 # One CMD argument is a shell string (pipes, &&); several are a command and its arguments.
@@ -186,11 +186,18 @@ cmd_send() {
 }
 
 cmd_ls() {
-  local d id
+  local d id st all=
+  case ${1:-} in
+    -a) all=1 ;;
+    "") ;;
+    *) die "usage: bgjob ls [-a]" ;;
+  esac
   for d in $(ls -1trd "$ROOT"/*/ 2>/dev/null); do
     id=$(basename "$d")
     [ -f "$d/cmd" ] || continue
-    printf '%-28s %-24s %s\n' "$id" "$(state "$id") $(elapsed "$id")" "$(head -c 80 "$d/cmd" | tr '\n' ' ')"
+    st=$(state "$id")
+    case $st in running | starting) ;; *) [ -n "$all" ] || continue ;; esac
+    printf '%-28s %-24s %s\n' "$id" "$st $(elapsed "$id")" "$(head -c 80 "$d/cmd" | tr '\n' ' ')"
   done
 }
 
@@ -215,7 +222,7 @@ case ${1:-} in
   log) shift; cmd_log "$@" ;;
   peek) shift; cmd_peek "$@" ;;
   send) shift; cmd_send "$@" ;;
-  ls) shift; cmd_ls ;;
+  ls) shift; cmd_ls "$@" ;;
   kill) shift; cmd_kill "$@" ;;
   -h | --help | help) usage ;;
   *) usage 2 >&2 ;;
