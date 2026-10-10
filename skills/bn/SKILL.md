@@ -1,11 +1,11 @@
 ---
 name: bn
-description: Use the local bn CLI for Binary Ninja reversing work when a Binary Ninja GUI session is already open. Prefer this skill for decompilation, function search, callsite recovery, IL/disassembly, xrefs, type inspection, struct field edits, previewed mutations, and inline Python execution through the bn bridge.
+description: Use the local bn CLI for Binary Ninja reversing work through the bn bridge. Prefer this skill for decompilation, function search, callsite recovery, IL/disassembly, xrefs, type inspection, struct field edits, previewed mutations, and inline Python execution. Also covers launching the Binary Ninja GUI remotely (e.g. over SSH) and managing multiple open files/tabs.
 ---
 
 # bn
 
-Use this skill when the user wants reverse-engineering work against an already-open Binary Ninja database and the local `bn` CLI is available.
+Use this skill when the user wants reverse-engineering work against a Binary Ninja database and the local `bn` CLI is available. If no GUI instance is running yet, see "Launching the GUI Remotely" below.
 
 ## Workflow
 
@@ -29,6 +29,91 @@ Use `bn doctor` when bridge state is unclear or `bn target list` does not show w
 - Other options: `--format json`, `--format ndjson`, `--out <path>`.
 
 Outputs above `10_000` `o200k_base` tokens auto-spill to disk. When that happens, stdout is empty and stderr carries the spill metadata as plain text, so do not chain `bn ... | rg ...` and expect to search the real output. Use `--out <path>` when you want the full body written to a known file.
+
+## Launching the GUI Remotely
+
+The bridge lives inside the Binary Ninja GUI, so `bn` needs a running GUI instance. When the user is away (e.g. only connected over SSH) and `bn target list` reports no instances, launch the GUI onto their existing graphical session yourself instead of asking them to open it.
+
+Requirements: a logged-in desktop session on the machine (a locked screen is fine). Licenses without headless API access cannot use `import binaryninja` outside the GUI, so this GUI-on-a-display approach is the workaround.
+
+```bash
+# Check that a graphical session exists to attach to
+ls "$XDG_RUNTIME_DIR" | rg '^wayland-'   # Wayland socket, e.g. wayland-0
+loginctl list-sessions                    # look for a session with a seat
+
+# Launch as a background job (it is long-running)
+bgjob start bn -- env WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" binaryninja /path/to/binary
+bgjob wait <job-id> -t 15
+bn target list                            # the file should appear once the bridge is up
+```
+
+- Adjust `WAYLAND_DISPLAY` / `DISPLAY` to what the session actually exposes. On a pure X11 session `DISPLAY=:0` alone is usually enough.
+- Startup plus initial analysis takes a few seconds; poll `bn target list` (via `bgjob wait -t ...`, not `sleep`) until the target shows up.
+- If nobody is logged in to a desktop, there is no display to attach to. Options are a virtual display (`Xvfb` / `xvfb-run`) or a headless Wayland compositor; ask the user before installing one.
+- When finished, shut the instance down with `bgjob kill <job-id>`, but **only after saving** any work (see below). Killing discards unsaved analysis.
+
+## Managing Multiple Files (Tabs)
+
+One GUI instance can hold several files as tabs. Each tab is its own `bn` target, so prefer one instance with many tabs over many instances.
+
+Tab control is not a built-in `bn` command; drive it through `bn py exec` with the `binaryninjaui` API, always on the main thread. Because more than one target is open, `py exec` itself needs `--target` (use `--target active` for UI-only scripts).
+
+Open more files in the running instance:
+
+```bash
+bn py exec --target active --stdin <<'PY'
+import binaryninjaui as ui
+from binaryninja.mainthread import execute_on_main_thread_and_wait
+out = {}
+def go():
+    ctx = ui.UIContext.activeContext()
+    for p in ["/path/to/second.bin", "/path/to/third.bin"]:   # .bndb works too
+        out[p] = bool(ctx.openFilename(p))
+execute_on_main_thread_and_wait(go)
+result = out
+PY
+bn target list
+```
+
+List, focus, and close tabs:
+
+```bash
+bn py exec --target active --stdin <<'PY'
+import binaryninjaui as ui
+from binaryninja.mainthread import execute_on_main_thread_and_wait
+FOCUS, CLOSE = "first.bin", "third.bin"
+out = {}
+def name(ctx, t):
+    f = ctx.getViewFrameForTab(t)
+    return f.getCurrentBinaryView().file.filename if f else None
+def go():
+    ctx = ui.UIContext.activeContext()
+    out["before"] = [name(ctx, t) for t in ctx.getTabs()]
+    for t in ctx.getTabs():
+        if (name(ctx, t) or "").endswith(FOCUS):
+            ctx.activateTab(t)
+    for t in ctx.getTabs():
+        if (name(ctx, t) or "").endswith(CLOSE):
+            ctx.closeTab(t)
+    out["after"] = [name(ctx, t) for t in ctx.getTabs()]
+execute_on_main_thread_and_wait(go)
+result = out
+PY
+```
+
+Rules for safe tab handling:
+
+- **Always target explicitly.** With several tabs open, pass `--target <selector>` from `bn target list` on every command. Use the target id rather than the basename when two files share a name.
+- **Save before closing or quitting.** Closing a tab with unsaved changes can pop a modal "save changes?" dialog that nobody can click remotely. That would block the GUI main thread and hang the bridge. Save first:
+
+  ```bash
+  bn py exec --target <selector> --code "result = bv.file.create_database('/path/to/file.bndb')"
+  ```
+
+  Saving to an existing `.bndb` path updates it. Reopening the `.bndb` later restores renames, types, and comments.
+- **Do not trust `bv.file.modified`.** It can read `False` even right after a `bn` mutation, so save unconditionally instead of checking it.
+- **Guard risky UI calls with a timeout**, e.g. `timeout 20 bn py exec ...`, so a modal dialog shows up as a failure instead of an indefinite hang.
+- Keep the focused tab meaningful. `--target active` follows the GUI-selected tab, so after opening files (the last one opened becomes active) refocus deliberately or use explicit selectors.
 
 ## High-Value Read Commands
 
