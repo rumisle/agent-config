@@ -30,7 +30,13 @@ and advice that changes halfway. These habits keep them short.
 ## Match effort to the question
 
 - "Where / what is it called / how do I start" is usually answered by a search results page and one good source.
-  Skim first; read deeply only when judging credibility or comparing options.
+  Skim first; read deeply only when judging credibility or comparing options, when sources disagree, or when a
+  mistake would cost money or a deadline.
+- Stop when more looking stops changing the answer (new results repeat the old ones, independent sources agree),
+  not after a fixed number of sources.
+- **Say how you looked**, so the user can judge the answer: skim or deep read; where and with which queries; how
+  many results seen and which sources opened; what was left out; how many independent sources back each claim
+  and how recent they are; what is still unknown and what looking further would take.
 - Prefer the fastest channel that reaches the same thing: an official web page or a desktop browser over tapping
   through a phone app; a direct link over menus.
 - Report progress in short steps instead of waiting silently on long jobs.
