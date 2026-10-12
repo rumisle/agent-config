@@ -34,14 +34,23 @@ port can change between launches and it still works.
 ## Commands
 
 ```bash
-{baseDir}/tether.py run <daemon> [code] [-n NS] [target opts]  # exec code; auto-creates daemon
-{baseDir}/tether.py ls                                          # list daemons (● live / ○ stale)
+{baseDir}/tether.py run <daemon> [code] [-n NS] [-t SECS] [target opts]  # exec code; auto-creates daemon
+{baseDir}/tether.py ls                                          # live daemons; clears dead ones' files
 {baseDir}/tether.py info <daemon>                               # health, namespaces, reconnects
-{baseDir}/tether.py kill <daemon>                               # stop a daemon
+{baseDir}/tether.py kill <daemon>                               # stop a daemon and its browser, wait for both
 ```
 
 `code` is positional, or omit it (or pass `-`) to read from **stdin** — use stdin
 for anything with quotes to avoid shell-escaping pain (see below).
+
+Nothing waits forever:
+
+- A run is cancelled after `-t` seconds (default 120) and reports so; the daemon stays usable. Split long work
+  into several runs, or pass a larger `-t`.
+- A daemon that cannot start fails the `run` at once with the end of its log (a bad executable, a profile it
+  cannot use), instead of waiting out the startup allowance (300 s, which covers an approval dialog or a first
+  Chromium download).
+- Errors show only your code's frames, with line numbers as you sent them.
 
 ## Launch a fresh browser instead (`--launch`)
 
@@ -62,8 +71,12 @@ remote-debugging setup; the browser lives and dies with the daemon.
   `--profile NAME`: `~/.tether/profiles/NAME`, reused by any daemon with that name.
 - Executable: `--executable` > `TETHER_CHROMIUM` > installed Chrome/Chromium/Brave/Edge >
   Playwright's bundled Chromium.
-- `tether kill <daemon>` closes the browser; on Linux it also dies if the daemon is
-  killed hard. Browser output goes to `~/.tether/<daemon>.browser.log`.
+- `tether kill <daemon>` closes the browser (its whole process group) and waits until both are gone; on Linux
+  the browser also dies if the daemon is killed hard. Browser output goes to `~/.tether/<daemon>.browser.log`.
+- A `--profile` still held by a browser left over from a dead daemon is freed on launch (that browser is
+  stopped): such a profile is tether's own, so nothing else uses it.
+- Launched browsers use `--password-store=basic`: on Linux without a desktop keyring (headless, ssh) Chromium
+  would otherwise wait for one and every request would hang.
 - The "stay out of the user's way" rules below exist for the user's own browser; in a
   launched browser nobody else is looking, so focus doesn't matter.
 
@@ -227,7 +240,8 @@ if p: await p.close()'
   browser's one-click **Allow** dialog — that's the M144 security model, not
   something tether can suppress.
 - Runtime state lives in `~/.tether/` (`<daemon>.sock` Unix socket `0600`,
-  `<daemon>.lock` single-winner flock, `<daemon>.json` meta, `<daemon>.log`).
+  `<daemon>.lock` single-winner flock held for the daemon's life, `<daemon>.json` meta, `<daemon>.log`).
+  `ls` removes the socket, lock and meta of daemons that died, and their logs after a week.
 - The daemon `exec`s arbitrary code over a user-only Unix socket — it's a local
   dev tool, treat it as such.
 - macOS/Linux only (Unix sockets). Officially Chrome; other Chromium browsers

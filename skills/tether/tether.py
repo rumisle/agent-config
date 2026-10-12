@@ -25,8 +25,8 @@ Model
 
 Usage
 -----
-  tether run <daemon> [code] [-n NS] [target opts]   # auto-creates daemon if absent
-  tether ls                                           # list daemons
+  tether run <daemon> [code] [-n NS] [-t SECS] [target opts]   # auto-creates daemon if absent
+  tether ls                                           # list daemons (clears dead ones' files)
   tether info <daemon>                                # namespaces + target + health
   tether kill <daemon>
   tether serve <daemon> [target opts]                 # (internal) run the daemon
@@ -84,6 +84,7 @@ LAUNCH_CANDIDATES = {
                "brave-browser", "microsoft-edge"],
 }
 PROFILES = os.path.join(BASE, "profiles")
+DEFAULT_TIMEOUT = 120   # seconds a run may take before the daemon cancels it
 
 
 def sock_path(name): return os.path.join(BASE, f"{name}.sock")
@@ -141,6 +142,11 @@ def check_launch(spec):
     find_executable(spec.get("executable"))
 
 
+def _killpg(pid, sig):
+    try: os.killpg(pid, sig)
+    except OSError: pass
+
+
 def _die_with_parent():
     """preexec_fn: on Linux, SIGTERM the launched browser if the daemon dies (even -9)."""
     if PLAT == "linux":
@@ -149,6 +155,34 @@ def _die_with_parent():
             ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
         except Exception:
             pass
+
+
+def _free_profile(udd):
+    """A profile in use by another Chromium makes a new one hand over to it and exit (code 21). tether's own
+    profiles are only used by tether, so a browser still holding one is left over from a daemon that died: stop it."""
+    lock = os.path.join(udd, "SingletonLock")
+    try:
+        owner = os.readlink(lock)               # "<host>-<pid>"
+    except OSError:
+        return
+    host, _, pid = owner.rpartition("-")
+    if host == socket.gethostname() and pid.isdigit():
+        pid = int(pid)
+        try:
+            cmdline = open(f"/proc/{pid}/cmdline", "rb").read().decode(errors="replace")
+        except OSError:
+            cmdline = ""
+        if udd in cmdline:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(50):
+                if not os.path.exists(f"/proc/{pid}"):
+                    break
+                time.sleep(0.1)
+            else:
+                os.kill(pid, signal.SIGKILL)
+    for f in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try: os.unlink(os.path.join(udd, f))
+        except OSError: pass
 
 
 def resolve(browser=None, user_data_dir=None, cdp_url=None, **_):
@@ -218,6 +252,21 @@ def _purge_dead_handles(store, _seen=None):
                 _purge_dead_handles(v, _seen)
 
 
+def _user_traceback(e):
+    """The traceback from the first frame of the user's code on (it runs as "<string>"), or the whole one."""
+    tb = traceback.extract_tb(e.__traceback__)
+    first = next((i for i, f in enumerate(tb) if f.filename == "<string>"), None)
+    if first is None:
+        return "".join(traceback.format_exception(e))
+    lines = []
+    for f in tb[first:]:
+        if f.filename == "<string>":
+            lines.append(f"  your code, line {f.lineno - 1}\n")
+        else:
+            lines.append(f"  {f.filename}:{f.lineno} in {f.name}\n")
+    return "Traceback:\n" + "".join(lines) + "".join(traceback.format_exception_only(e))
+
+
 class Daemon:
     def __init__(self, name, spec):
         self.name = name
@@ -245,6 +294,7 @@ class Daemon:
             else:
                 self.udd = tempfile.mkdtemp(prefix=f"tether-{self.name}-")
                 self.ephemeral = True
+        _free_profile(self.udd)
         port_file = os.path.join(self.udd, "DevToolsActivePort")
         try: os.unlink(port_file)
         except OSError: pass
@@ -259,7 +309,7 @@ class Daemon:
         args.append("about:blank")
         blog = open(os.path.join(BASE, f"{self.name}.browser.log"), "a")
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=blog, stderr=blog,
-                                     preexec_fn=_die_with_parent)
+                                     preexec_fn=_die_with_parent, start_new_session=True)
         deadline = time.time() + 30
         while time.time() < deadline:
             if self.proc.poll() is not None:
@@ -273,9 +323,9 @@ class Daemon:
 
     def _stop_browser(self):
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
+            _killpg(self.proc.pid, signal.SIGTERM)
             try: self.proc.wait(5)
-            except subprocess.TimeoutExpired: self.proc.kill()
+            except subprocess.TimeoutExpired: _killpg(self.proc.pid, signal.SIGKILL)
         if self.ephemeral and self.udd:
             shutil.rmtree(self.udd, ignore_errors=True)
 
@@ -326,7 +376,14 @@ class Daemon:
                 return
             await self._reconnect()
 
-    async def run(self, code, ns):
+    async def run(self, code, ns, timeout):
+        try:
+            return await asyncio.wait_for(self._run(code, ns), timeout)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": f"timed out after {timeout:g}s (the code was cancelled; pages it "
+                                          f"opened stay open). Pass --timeout for longer work."}
+
+    async def _run(self, code, ns):
         await self.ensure_live()
         S = self.ns.setdefault(ns, {})
         browser = self.browser
@@ -338,11 +395,12 @@ class Daemon:
             keep the pages. Pass url to navigate, or omit for about:blank."""
             c = browser.contexts[0]
             cdp = await browser.new_browser_cdp_session()
-            before = {id(x) for x in c.pages}
-            await cdp.send("Target.createTarget", {"url": url or "about:blank", "background": True})
-            await asyncio.sleep(0.4)
-            new = [x for x in c.pages if id(x) not in before]
-            return new[0] if new else c.pages[-1]
+            try:
+                async with c.expect_page(timeout=15000) as info:
+                    await cdp.send("Target.createTarget", {"url": url or "about:blank", "background": True})
+                return await info.value
+            finally:
+                await cdp.detach()
 
         g = {"browser": browser, "ctx": ctx, "S": S, "G": self.G,
              "asyncio": asyncio, "out": {}, "new_bg_page": new_bg_page}
@@ -375,11 +433,11 @@ class Daemon:
                     "shared_keys": list(self.G.keys()),
                 }}
             elif op == "run":
-                resp = await self.run(req["code"], req.get("ns", "default"))
+                resp = await self.run(req["code"], req.get("ns", "default"), req.get("timeout", DEFAULT_TIMEOUT))
             else:
                 resp = {"ok": False, "error": f"unknown op {op!r}"}
-        except Exception:
-            resp = {"ok": False, "error": traceback.format_exc()}
+        except Exception as e:
+            resp = {"ok": False, "error": _user_traceback(e)}
         try:
             writer.write((json.dumps(resp, default=str) + "\n").encode())
             await writer.drain()
@@ -411,7 +469,8 @@ class Daemon:
             raise
         server = await asyncio.start_unix_server(self.handle, path=sp)
         os.chmod(sp, 0o600)
-        json.dump({"pid": os.getpid(), "target": self.target_desc,
+        json.dump({"pid": os.getpid(), "browser_pid": self.proc.pid if self.proc else None,
+                   "target": self.target_desc,
                    "spec": self.spec, "cdp_url": self.cdp_url,
                    "started": self.started}, open(meta_path(self.name), "w"))
         print("READY", flush=True)
@@ -430,18 +489,23 @@ class Daemon:
 
 
 # ---------------------------------------------------------------- client
-def send(name, payload, timeout=120):
+def send(name, payload, timeout=DEFAULT_TIMEOUT + 15):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(timeout)
-    s.connect(sock_path(name))
-    s.sendall((json.dumps(payload) + "\n").encode())
-    buf = b""
-    while not buf.endswith(b"\n"):
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        buf += chunk
-    s.close()
+    try:
+        s.connect(sock_path(name))
+        s.sendall((json.dumps(payload) + "\n").encode())
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        s.close()
+    if not buf:
+        raise RuntimeError(f"daemon {name!r} closed the connection without answering (did it die?); "
+                           f"see {log_path(name)}")
     return json.loads(buf.decode())
 
 
@@ -483,23 +547,69 @@ def ensure_daemon(name, spec):
         check_launch(spec)
     else:
         resolve(**spec)   # fail fast in the client with a clear error
-    import subprocess
     cmd = [sys.executable, os.path.abspath(__file__), "serve", name] + target_flags(spec)
     lf = open(log_path(name), "w")
-    subprocess.Popen(cmd, stdout=lf, stderr=lf, start_new_session=True)
+    proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, start_new_session=True)
     deadline = time.time() + 300   # approval dialog, or a first-time Chromium download
     while time.time() < deadline:
         if alive(name):
             return
-        time.sleep(0.4)
-    raise RuntimeError(f"daemon {name!r} did not become ready; see {log_path(name)}")
+        if proc is not None and proc.poll() is not None:
+            if not lock_held(name):
+                raise RuntimeError(f"daemon {name!r} failed to start:\n{_tail(log_path(name))}")
+            proc = None            # lost a race to another client's daemon: wait for that one
+        time.sleep(0.2)
+    raise RuntimeError(f"daemon {name!r} did not become ready in 300s; see {log_path(name)}")
+
+
+def _tail(path, n=6):
+    try:
+        return "".join(open(path, errors="replace").readlines()[-n:]).rstrip()
+    except OSError:
+        return "(no log)"
+
+
+def lock_held(name):
+    """Whether a daemon process holds this name (its flock lives exactly as long as it does)."""
+    try:
+        f = open(lock_path(name), "r")
+    except OSError:
+        return False
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        f.close()
+
+
+def remove_files(name, logs=False):
+    kinds = [sock_path, meta_path, lock_path] + ([log_path, lambda n: os.path.join(BASE, f"{n}.browser.log")]
+                                                 if logs else [])
+    for path in kinds:
+        try: os.unlink(path(name))
+        except OSError: pass
 
 
 def list_daemons():
+    """Live daemons; the files of dead ones are cleared on the way (logs stay for a look at what happened)."""
     if not os.path.isdir(BASE):
         return []
-    return [(fn[:-5], alive(fn[:-5]))
-            for fn in sorted(os.listdir(BASE)) if fn.endswith(".sock")]
+    names = sorted({fn.rsplit(".", 1)[0] for fn in os.listdir(BASE) if fn.endswith((".sock", ".json", ".lock"))})
+    live = []
+    for name in names:
+        if lock_held(name):
+            live.append((name, alive(name)))
+        else:
+            remove_files(name)
+    week_ago = time.time() - 7 * 86400
+    for fn in os.listdir(BASE):
+        path = os.path.join(BASE, fn)
+        if fn.endswith(".log") and fn.split(".", 1)[0] not in dict(live) and os.path.getmtime(path) < week_ago:
+            os.unlink(path)
+    return live
 
 
 # ---------------------------------------------------------------- cli
@@ -520,6 +630,8 @@ def main():
     pr.add_argument("daemon")
     pr.add_argument("code", nargs="?", default="-")
     pr.add_argument("-n", "--ns", default="default")
+    pr.add_argument("-t", "--timeout", type=float, default=DEFAULT_TIMEOUT,
+                    help=f"seconds before the daemon cancels the code (default {DEFAULT_TIMEOUT})")
     add_target(pr)
 
     ps = sub.add_parser("serve")
@@ -547,15 +659,23 @@ def main():
             print(f"{'●' if ok else '○'} {name:16} {meta.get('target','')}")
 
     elif args.cmd == "kill":
-        if os.path.exists(meta_path(args.daemon)):
-            try:
-                pid = json.load(open(meta_path(args.daemon))).get("pid")
-                if pid: os.kill(pid, 15)
-            except (OSError, ValueError):
-                pass
-        for p in (sock_path(args.daemon), meta_path(args.daemon)):
-            try: os.unlink(p)
+        meta = {}
+        try: meta = json.load(open(meta_path(args.daemon)))
+        except (OSError, ValueError): pass
+        pid = meta.get("pid")
+        if pid:
+            try: os.kill(pid, signal.SIGTERM)  # the daemon closes its browser on the way out
             except OSError: pass
+            for _ in range(100):
+                if not lock_held(args.daemon):
+                    break
+                time.sleep(0.1)
+            else:
+                try: os.kill(pid, signal.SIGKILL)  # its browser follows (PDEATHSIG)
+                except OSError: pass
+        if meta.get("browser_pid"):
+            _killpg(meta["browser_pid"], signal.SIGKILL)  # in case the daemon died before it could
+        remove_files(args.daemon, logs=True)
         print(f"killed {args.daemon}")
 
     elif args.cmd == "info":
@@ -565,8 +685,15 @@ def main():
     elif args.cmd == "run":
         code = sys.stdin.read() if args.code == "-" else args.code
         spec = spec_from_args(args)
-        ensure_daemon(args.daemon, spec)
-        resp = send(args.daemon, {"op": "run", "code": code, "ns": args.ns})
+        try:
+            ensure_daemon(args.daemon, spec)
+        except RuntimeError as e:
+            sys.exit(f"tether: {e}")
+        try:
+            resp = send(args.daemon, {"op": "run", "code": code, "ns": args.ns, "timeout": args.timeout},
+                        timeout=args.timeout + 15)
+        except (OSError, RuntimeError) as e:
+            sys.exit(f"tether: {e}")
         if resp.get("ok"):
             r = resp["result"]
             print(r if isinstance(r, str) else json.dumps(r, indent=2, ensure_ascii=False))
