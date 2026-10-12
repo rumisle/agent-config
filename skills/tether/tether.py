@@ -248,8 +248,10 @@ class Daemon:
         port_file = os.path.join(self.udd, "DevToolsActivePort")
         try: os.unlink(port_file)
         except OSError: pass
+        # password-store=basic: otherwise Chrome on Linux waits on the desktop keyring for the cookie key,
+        # and with no keyring (headless, ssh) every request hangs.
         args = [exe, f"--user-data-dir={self.udd}", "--remote-debugging-port=0",
-                "--no-first-run", "--no-default-browser-check"]
+                "--no-first-run", "--no-default-browser-check", "--password-store=basic"]
         if self.spec["launch"] == "headless":
             args.append("--headless=new")
         if hasattr(os, "geteuid") and os.geteuid() == 0:
