@@ -5,8 +5,8 @@
     { "package": "github:rumisle/opencode-cache-warmer#87aff71048c8cb0a041efbf09fc5b2114d137c5b", "options": { "mode": "idle" } },
     "github:rumisle/opencode-octopi#292b189a3e515d06eff22ef78342a90deb8e557f"
   ],
-  // ocelot: checkpoint compaction (patch core/checkpoint-compaction). Compacts at min(90% of the window, 540k).
-  "compaction": { "strategy": "checkpoint" },
+  // ocelot: checkpoint compaction (patch core/checkpoint-compaction). Compacts at min(90% of the window, 700k).
+  "compaction": { "strategy": "checkpoint", "threshold": { "tokens": 700000 } },
   // ocelot: no model-initiated background shells (patch core/no-shell-background); long commands use bgjob (AGENTS.md).
   "experimental": { "no_shell_background": true },
   "permissions": [
