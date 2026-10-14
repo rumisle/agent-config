@@ -34,3 +34,12 @@ for d in "$here"/skills/*/ "$private"/skills/*/; do
   [ -f "$d/SKILL.md" ] || continue
   link "${d%/}" "$skills/$(basename "$d")"
 done
+
+# Private OpenCode plugins: linked into the global config's auto-discovered plugins/ dir
+# (gitignored), since ~/.config/opencode itself is this repo's opencode/.
+plugins="$here/opencode/plugins"
+[ -d "$plugins" ] && find "$plugins" -maxdepth 1 -type l ! -exec test -e {} \; -print -delete
+for f in "$private"/opencode/plugins/*; do
+  [ -e "$f" ] || continue
+  link "$f" "$plugins/$(basename "$f")"
+done

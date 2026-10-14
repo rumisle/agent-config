@@ -7,3 +7,4 @@ opencode/bun.lock
 opencode/*.tmp
 __pycache__/
 *.pyc
+opencode/plugins/

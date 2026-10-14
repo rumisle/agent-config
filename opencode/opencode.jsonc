@@ -3,7 +3,7 @@
   "plugins": [
     "github:rumisle/opencode-anth#d92862ebcdbee624039a94a30ea50de77a1b1cb6",
     { "package": "github:rumisle/opencode-cache-warmer#87aff71048c8cb0a041efbf09fc5b2114d137c5b", "options": { "mode": "idle" } },
-    "github:rumisle/opencode-octopi#292b189a3e515d06eff22ef78342a90deb8e557f"
+    { "package": "github:rumisle/opencode-octopi#292b189a3e515d06eff22ef78342a90deb8e557f", "options": { "maxRunning": 64 } }
   ],
   // ocelot: checkpoint compaction (patch core/checkpoint-compaction). Compacts at min(90% of the window, 700k).
   "compaction": { "strategy": "checkpoint", "threshold": { "tokens": 700000 } },
