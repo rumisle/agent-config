@@ -1,5 +1,4 @@
-#!/usr/bin/env -S -u LD_LIBRARY_PATH uv run --script
-# (system CUDA on LD_LIBRARY_PATH would shadow the pinned pip CUDA libs)
+#!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = "==3.12.*"
 # dependencies = [
@@ -35,9 +34,17 @@ INPUT    audio/video file, or any URL yt-dlp understands (podcast page,
 
 Writes PREFIX.txt ("[hh:mm:ss] line" per segment) and PREFIX.srt.
 """
+import os
+import sys
+
+# A system CUDA on LD_LIBRARY_PATH shadows the pinned pip CUDA libs (cuBLASLt
+# mismatch -> CUBLAS_STATUS_NOT_INITIALIZED). The loader reads it only at
+# process start, so re-exec once without it, however we were launched.
+if os.environ.pop("LD_LIBRARY_PATH", None) is not None:
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
 import argparse
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
